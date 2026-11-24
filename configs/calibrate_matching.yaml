@@ -1,0 +1,14 @@
+# Prétraitement de TOUTE la validation, sans tirage aléatoire.
+split: val
+history_size: 6
+num_predictions: 10
+frame_step: 2
+min_visible_objects: 3
+batch_frames: 8
+device: auto
+decoder_config: src/third_party/videosaur/configs/videosaur/clevrer_dinov2_hf.yml
+
+# Valeurs exploratoires. Cette grille peut être modifiée après le calcul.
+thresholds:
+  min_target_coverage: [0.50, 0.70, 0.80, 0.90, 0.95, 1.00]
+  max_other_coverage: [0.00, 0.01, 0.05, 0.10, 0.20, 0.30]

@@ -1,0 +1,11 @@
+# Configuration unique des chemins : remplacer TON_IDENTIFIANT par ton compte Fir.
+# object_masks_dir contient les proposal_XXXXX.json de derender_proposals.
+paths:
+  slots: /scratch/TON_IDENTIFIANT/cjepa/clevrer_videosaur_slots.pkl
+  encoder_checkpoint: /scratch/TON_IDENTIFIANT/cjepa/checkpoints/clevrer_videosaur_model.ckpt
+  cjepa_checkpoint: /scratch/TON_IDENTIFIANT/cjepa/checkpoints/clevrer_videosaur_4_epoch_30_object.ckpt
+  ocjepa_checkpoint: /scratch/TON_IDENTIFIANT/cjepa/checkpoints/clevrer_videosaur_0_epoch_30_object.ckpt
+  videos_dir: /scratch/TON_IDENTIFIANT/cjepa/videos/validation
+  annotations_dir: /scratch/TON_IDENTIFIANT/cjepa/annotation_validation
+  object_masks_dir: /scratch/TON_IDENTIFIANT/cjepa/derender_proposals
+  output_dir: /scratch/TON_IDENTIFIANT/cjepa/matching_preprocess_val

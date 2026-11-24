@@ -1,5 +1,6 @@
 
 # cjepa
+/slurm-preprocess-*.out
 eval_results/**
 *key.*
 temp/*
@@ -40,6 +41,7 @@ checkpoints/
 .idea/
 **/*.npy
 *.sh
+!/scripts/ablation_robotic_MVA/download_data_fir.sh
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -170,3 +172,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# notebooks
+*.ipynb
+output/
+.DS_Store

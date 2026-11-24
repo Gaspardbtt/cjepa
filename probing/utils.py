@@ -92,10 +92,17 @@ def load_collision_frames(annotation_path: str) -> list[int]:
 # Load C-JEPA predictor from checkpoint
 # ---------------------------------------------------------------------------
 
-def load_cjepa_predictor(ckpt_path: str, num_mask_slots: int, configs, device: str = "cuda"):
+def load_cjepa_predictor(
+    ckpt_path: str,
+    num_mask_slots: int,
+    configs,
+    device: str = "cuda",
+    strict: bool = True,
+):
     """
-    Load a C-JEPA checkpoint saved with ``torch.save(pl_module, path)``.
-    Returns the ``MaskedSlotPredictor`` sub-module.
+    Load a predictor state dict and return the ``MaskedSlotPredictor``.
+
+    With strict=True, missing or unexpected checkpoint keys raise an error.
     """
     spt_module = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     predictor = MaskedSlotPredictor(
@@ -111,7 +118,7 @@ def load_cjepa_predictor(ckpt_path: str, num_mask_slots: int, configs, device: s
         mlp_dim=configs.predictor.mlp_dim,
         dropout=configs.predictor.dropout,
     )
-    missing, unexpected = predictor.load_state_dict(spt_module, strict=False)
+    missing, unexpected = predictor.load_state_dict(spt_module, strict=strict)
     if missing:
         print(f"Missing keys in predictor: {missing}")
     if unexpected:

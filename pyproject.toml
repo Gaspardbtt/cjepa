@@ -1,5 +1,5 @@
 [project]
-name = "cjepa:collision-ablation"
+name = "cjepa-collision-ablation"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
@@ -8,6 +8,8 @@ dependencies = [
     "einops>=0.8.2",
     "ffmpeg>=1.4",
     "hickle>=5.0.4",
+    "imageio>=2.38.2",
+    "opencv-python>=5.1.0.95",
     "pycocotools>=2.0.11",
     "seaborn>=0.13.2",
     "swig>=4.5.1",

@@ -5,15 +5,18 @@ err[i, c, s] = ||z_hat[c, s] - z[s]||^2 at the target position (frame T+1).
 
 Saved in errors_<model>.npz:
   err            [n, 8, 7]       main analysis (h=1)
-  err_h          [n, 8, 10, 7]   same conditions at horizons h=1..10 (NaN past the video)
-  err_tgt_hidden [n, 7, 7, 10]   [i, t, k, h-1]: error on slot t when slots t AND k are
+  horizons       [H]             horizons saved (--horizons, default 1..10)
+  err_h          [n, 8, H, 7]    same conditions at those horizons (NaN past the video)
+  err_copy       [n, H, 7]       copy-last baseline ||z[T-1] - z[frame_h]||^2
+  err_tgt_hidden [n, 7, 7, H]    only with --target-hidden (49 more masks, ~7x slower):
+                                 [i, t, k, j] = error on slot t when slots t AND k are
                                  hidden at steps 1-5 (k == t: only t hidden)
-  err_copy       [n, 10, 7]      copy-last baseline ||z[T-1] - z[frame_h]||^2
 
 Usage:
   uv run python -m ablation.run_ablation --model cjepa --device cpu [--limit N] [--check]
+      [--horizons 1 2 5] [--target-hidden]
   debug on one window, outside results/:
-  ... --windows matching_preprocess_val/windows.json --results-dir <dir> --check
+  ... --windows matching_preprocess_val/windows_example.json --results-dir <dir> --check
 """
 
 import argparse
@@ -142,6 +145,7 @@ def check_window(
     window: dict[str, Any],
     masks: torch.Tensor,
     predictor: MaskedSlotPredictor,
+    target_hidden: bool,
 ) -> None:
     """Dev sanity checks (NOTES.md), printed for one window."""
     pred = predict_conditions(history, masks, predictor)[0, config.TARGET_POSITION]
@@ -157,14 +161,16 @@ def check_window(
         raise AssertionError("Two passes give different errors (non-deterministic)")
     print("  [check] deterministic: OK")
 
-    pair = predict_conditions(history, build_target_hidden_masks().to(history.device), predictor)
-    pair_err = ((pair[:, config.TARGET_POSITION] - target) ** 2).sum(-1).cpu().numpy()
-    S = config.NUM_SLOTS
-    self_pair = np.array([pair_err[t * S + t, t] for t in range(S)])
-    self_main = np.array([err[t + 1, t] for t in range(S)])
-    if not np.allclose(self_pair, self_main, atol=1e-4):
-        raise AssertionError(f"Pair (t, t) != condition t+1: {self_pair} vs {self_main}")
-    print("  [check] target-hidden (t, t) == condition t+1: OK")
+    if target_hidden:
+        pair_masks = build_target_hidden_masks().to(history.device)
+        pair = predict_conditions(history, pair_masks, predictor)
+        pair_err = ((pair[:, config.TARGET_POSITION] - target) ** 2).sum(-1).cpu().numpy()
+        S = config.NUM_SLOTS
+        self_pair = np.array([pair_err[t * S + t, t] for t in range(S)])
+        self_main = np.array([err[t + 1, t] for t in range(S)])
+        if not np.allclose(self_pair, self_main, atol=1e-4):
+            raise AssertionError(f"Pair (t, t) != condition t+1: {self_pair} vs {self_main}")
+        print("  [check] target-hidden (t, t) == condition t+1: OK")
 
     copy_err = ((history[-1] - target) ** 2).sum(-1).cpu().numpy()
     s2o = window["slot_to_object"]
@@ -188,7 +194,12 @@ def run(
     check: bool,
     windows_path: Path,
     results_dir: Path,
+    horizons: list[int],
+    target_hidden: bool,
 ) -> None:
+    horizons = sorted(set(horizons))
+    if not horizons or not set(horizons) <= set(config.HORIZONS):
+        raise ValueError(f"Horizons must be in {list(config.HORIZONS)}, got {horizons}")
     torch.manual_seed(0)
     windows = load_windows(windows_path, measured_only=True)
     if limit is not None:
@@ -202,15 +213,17 @@ def run(
     slots_npz = np.load(config.SLOTS_SUBSET_PATH)
     predictor = load_predictor(model, device)
     masks = build_masks().to(device)
-    all_masks = torch.cat([masks, build_target_hidden_masks().to(device)])
-    S, H, C = config.NUM_SLOTS, config.PRED_FRAMES, config.N_CONDITIONS
-    future_pos = slice(config.HISTORY_FRAMES, config.TOTAL_FRAMES)
+    if target_hidden:
+        masks = torch.cat([masks, build_target_hidden_masks().to(device)])
+    S, C = config.NUM_SLOTS, config.N_CONDITIONS
+    h_idx = [h - 1 for h in horizons]  # index among the 10 future steps
+    H = len(horizons)
 
     n = len(windows)
     errors = np.empty((n, C, S), np.float32)
     errors_h = np.empty((n, C, H, S), np.float32)
-    errors_tgt_hidden = np.empty((n, S, S, H), np.float32)
     errors_copy = np.empty((n, H, S), np.float32)
+    errors_tgt_hidden = np.empty((n, S, S, H), np.float32) if target_hidden else None
     for i, w in enumerate(windows):
         key = str(w["video_id"])
         if key not in slots_npz:
@@ -219,28 +232,32 @@ def run(
         history = torch.from_numpy(history_np).float().to(device)
         future = torch.from_numpy(future_np).float().to(device)  # [H, S, D]
         target = future[0]
-        pred = predict_conditions(history, all_masks, predictor)[:, future_pos]  # [C+S*S, H, S, D]
-        sq = ((pred - future) ** 2).sum(-1).cpu().numpy()  # [C+S*S, H, S]
-        errors_h[i] = sq[:C]
-        errors[i] = sq[:C, 0]
-        pair = sq[C:].reshape(S, S, H, S)  # [t, k, h, slot]
-        errors_tgt_hidden[i] = pair[np.arange(S), :, :, np.arange(S)]  # slot = t
-        errors_copy[i] = ((history[-1] - future) ** 2).sum(-1).cpu().numpy()
+        pred = predict_conditions(history, masks, predictor)[:, config.HISTORY_FRAMES :]
+        sq = ((pred - future) ** 2).sum(-1).cpu().numpy()  # [n_masks, 10, S]
+        errors[i] = sq[:C, 0]  # main analysis: h=1, always saved
+        errors_h[i] = sq[:C, h_idx]
+        copy = ((history[-1] - future) ** 2).sum(-1).cpu().numpy()  # [10, S]
+        errors_copy[i] = copy[h_idx]
+        if errors_tgt_hidden is not None:
+            pair = sq[C:][:, h_idx].reshape(S, S, H, S)  # [t, k, h, slot]
+            errors_tgt_hidden[i] = pair[np.arange(S), :, :, np.arange(S)]  # slot = t
         if check:
             print(f"Window {w['video_id']}/{w['event_index']}:")
-            check_window(history, target, errors[i], w, all_masks, predictor)
+            check_window(history, target, errors[i], w, masks, predictor, target_hidden)
         if (i + 1) % 100 == 0:
             print(f"{i + 1}/{len(windows)} windows")
 
     results_dir.mkdir(parents=True, exist_ok=True)
     out_path = results_dir / config.errors_path(model).name
-    np.savez(
-        out_path,
-        err=errors,
-        err_h=errors_h,
-        err_tgt_hidden=errors_tgt_hidden,
-        err_copy=errors_copy,
-    )
+    arrays = {
+        "err": errors,
+        "horizons": np.array(horizons),
+        "err_h": errors_h,
+        "err_copy": errors_copy,
+    }
+    if errors_tgt_hidden is not None:
+        arrays["err_tgt_hidden"] = errors_tgt_hidden
+    np.savez(out_path, **arrays)
     write_index(windows, results_dir / config.ERRORS_INDEX_PATH.name)
     print(f"Saved err {errors.shape} to {out_path}")
 
@@ -271,8 +288,19 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="run dev sanity checks")
     parser.add_argument("--windows", type=Path, default=config.WINDOWS_PATH)
     parser.add_argument("--results-dir", type=Path, default=config.RESULTS_DIR)
+    parser.add_argument(
+        "--horizons", type=int, nargs="+", default=list(config.HORIZONS),
+        help="horizons to save in err_h (default 1..10); h=1 is always in err",
+    )
+    parser.add_argument(
+        "--target-hidden", action="store_true",
+        help="also run the target-hidden variant (49 more masks, ~7x slower)",
+    )
     args = parser.parse_args()
-    run(args.model, args.device, args.limit, args.check, args.windows, args.results_dir)
+    run(
+        args.model, args.device, args.limit, args.check, args.windows, args.results_dir,
+        args.horizons, args.target_hidden,
+    )
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ Outputs (in --out-dir, default results/):
 
 Usage:
   uv run python -m ablation.analyze
-  uv run python -m ablation.analyze --windows matching_preprocess_val/windows.json \
+  uv run python -m ablation.analyze --windows matching_preprocess_val/windows_example.json \
       --results-dir <dir> --split all --no-threshold      # debug, prints only
 """
 
@@ -283,13 +283,22 @@ def max_clean_horizon(w: dict[str, Any], annotation: dict[str, Any]) -> int:
     return best
 
 
+def horizon_index(npz: dict[str, np.ndarray], hs: list[int]) -> list[int]:
+    """Position of each horizon h in the saved arrays (see npz['horizons'])."""
+    stored = [int(h) for h in npz["horizons"]]
+    missing = [h for h in hs if h not in stored]
+    if missing:
+        raise ValueError(f"Horizons {missing} not saved (saved: {stored}); rerun run_ablation")
+    return [stored.index(h) for h in hs]
+
+
 def as_ablation_err(npz: dict[str, np.ndarray], variant: str, hs: list[int]) -> np.ndarray:
     """[n, 8, 7] array read like `err` by window_instances, errors summed over hs.
 
     standard:      E[0, t] = err(t | ref),      E[k+1, t] = err(t | k hidden)
     target_hidden: E[0, t] = err(t | t hidden), E[k+1, t] = err(t | t and k hidden)
     """
-    idx = [h - 1 for h in hs]
+    idx = horizon_index(npz, hs)
     if variant == "standard":
         return npz["err_h"][:, :, idx, :].sum(2)
     pair = npz["err_tgt_hidden"][:, :, :, idx].sum(3)  # [n, t, k]
@@ -312,6 +321,7 @@ def horizon_rows(
     npz_by_model: dict[str, dict[str, np.ndarray]],
     rows: dict[tuple[int, int], int],
     split: str,
+    horizons: list[int],
 ) -> list[dict[str, Any]]:
     clean_h: dict[tuple[int, int], int] = {}
     annotations: dict[int, dict[str, Any]] = {}
@@ -324,12 +334,14 @@ def horizon_rows(
                 if w["video_id"] not in annotations:
                     annotations[w["video_id"]] = load_annotation(w["video_id"])
                 clean_h[key] = max_clean_horizon(w, annotations[w["video_id"]])
-        settings = [(str(h), [h]) for h in config.HORIZONS]
-        settings.append((f"sum_1-{max(config.AGG_HORIZONS)}", list(config.AGG_HORIZONS)))
+        settings = [(str(h), [h]) for h in horizons]
+        if set(config.AGG_HORIZONS) <= set(horizons):
+            settings.append((f"sum_1-{max(config.AGG_HORIZONS)}", list(config.AGG_HORIZONS)))
         for label, hs in settings:
             ws = [w for w in accepted if clean_h[(w["video_id"], w["event_index"])] >= max(hs)]
             for model, npz in npz_by_model.items():
-                for variant in ("standard", "target_hidden"):
+                variants = ["standard"] + (["target_hidden"] if "err_tgt_hidden" in npz else [])
+                for variant in variants:
                     base = {"thresholds": th_name, "model": model, "variant": variant,
                             "horizon": label}
                     if not ws:
@@ -340,7 +352,7 @@ def horizon_rows(
                     m = model_metrics(inst)
                     row = base | {k: m[k] for k in HORIZON_COLUMNS}
                     if variant == "standard":
-                        idx = [h - 1 for h in hs]
+                        idx = horizon_index(npz, hs)
                         copy = np.array([
                             npz["err_copy"][rows[(r["video_id"], r["event_index"])], idx,
                                             r["target_slot"]].sum()
@@ -399,6 +411,10 @@ def main() -> None:
         "--no-threshold",
         action="store_true",
         help="debug: flags only, print, write nothing",
+    )
+    parser.add_argument(
+        "--horizons", type=int, nargs="+", default=None,
+        help="horizons for table_horizon (default: all saved by run_ablation)",
     )
     args = parser.parse_args()
 
@@ -469,14 +485,20 @@ def main() -> None:
     npz_by_model = {}
     for m in errors:
         z = np.load(args.results_dir / f"errors_{m}.npz")
-        if {"err_h", "err_tgt_hidden", "err_copy"} <= set(z.files):
-            npz_by_model[m] = {k: z[k] for k in ("err_h", "err_tgt_hidden", "err_copy")}
-        else:
+        if not {"err_h", "err_copy"} <= set(z.files):
             print(f"errors_{m}.npz has no horizon data: rerun run_ablation for table_horizon")
+            continue
+        npz_by_model[m] = {k: z[k] for k in z.files if k != "err"}
+        if "horizons" not in z.files:  # files saved before --horizons existed
+            npz_by_model[m]["horizons"] = np.arange(1, z["err_h"].shape[2] + 1)
+        if "err_tgt_hidden" not in z.files:
+            print(f"errors_{m}.npz has no target-hidden data (run_ablation --target-hidden)")
     if npz_by_model:
+        saved = [{int(h) for h in z["horizons"]} for z in npz_by_model.values()]
+        horizons = sorted(args.horizons) if args.horizons else sorted(set.intersection(*saved))
         write_csv(
             args.out_dir / "table_horizon.csv",
-            horizon_rows(windows, npz_by_model, rows, args.split),
+            horizon_rows(windows, npz_by_model, rows, args.split, horizons),
         )
 
 

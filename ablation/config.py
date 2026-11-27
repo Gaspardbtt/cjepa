@@ -6,7 +6,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # --- Inputs -----------------------------------------------------------------
 WINDOWS_PATH = REPO_ROOT / "matching_preprocess_val" / "windows.jsonl"  # all windows
-DEBUG_WINDOWS_PATH = REPO_ROOT / "matching_preprocess_val" / "windows.json"  # 1 window
+DEBUG_WINDOWS_PATH = REPO_ROOT / "matching_preprocess_val" / "windows_example.json"  # 1 window
 SLOTS_PKL_PATH = REPO_ROOT / "checkpoints" / "clevrer_videosaur_slots.pkl"
 SLOTS_SUBSET_PATH = REPO_ROOT / "data" / "slots_val_subset.npz"
 SLOTS_SPLIT = "val"
